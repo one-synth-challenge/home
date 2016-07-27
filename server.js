@@ -11,6 +11,10 @@ const server = express()
   .use((req, res) => res.sendFile(INDEX))
   .listen(PORT, () => console.log(`Listening on ${PORT}`));
 
+server.get('/', function(req, res) {
+  console.log('Get / on:', port);
+});
+
 const wss = new SocketServer({ server });
 
 wss.on('connection', (ws) => {
