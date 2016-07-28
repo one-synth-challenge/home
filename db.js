@@ -117,7 +117,7 @@ module.exports = (connectString, onReady) => {
   ];
 
   // Initializes all the tables that need it
-  let promise = Promise.resolve();
+  var promise = Promise.resolve();
   createOrder.map(table => {
     promise = promise.then(() => table.sync({force: true}));
   });
