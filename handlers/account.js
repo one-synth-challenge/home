@@ -46,10 +46,10 @@ module.exports = u.resolve((db, session) => (router, app) => {
         return fetchUser.then(() => link);
       })
       .then(acctLink => {
-        db.User.findOne({where:{id:{$eq:acctLink.userId}}})
-        .then(user => session.begin(user))
-        .then(authInfo => attachExternalAccounts(authInfo))
-        .then(authInfo => res.json(authInfo));
+        return db.User.findOne({where:{id:{$eq:acctLink.userId}}})
+          .then(user => session.begin(user))
+          .then(authInfo => attachExternalAccounts(authInfo))
+          .then(authInfo => res.json(authInfo));
       })
     });
   });
