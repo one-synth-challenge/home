@@ -1,4 +1,5 @@
 var SQ = require('sequelize');
+var u = require('./util');
 
 module.exports = (connectString, onReady) => {
   const s = new SQ(connectString);
@@ -7,6 +8,12 @@ module.exports = (connectString, onReady) => {
     query: s.query,
     normalizeDataType: s.normalizeDataType.bind(s),
     DataTypes: SQ,
+    assertFound: result => {
+      if (!result) {
+        throw new Error('Not Found');
+      }
+      return result;
+    },
   };
 
   const createOrder = [];
@@ -17,6 +24,13 @@ module.exports = (connectString, onReady) => {
       defaultValue: SQ.UUIDV1,
       primaryKey: true,
     },
+    username: {
+      type: SQ.STRING,
+      allowNull: false,
+    },
+    passwordHash: {
+      type: SQ.STRING,
+    },
     firstName: {
       type: SQ.STRING,
     },
@@ -25,9 +39,42 @@ module.exports = (connectString, onReady) => {
     },
     email: {
       type: SQ.STRING,
-      allowNull: false,
     },
   });
+
+  db.Session = createOrder[createOrder.length] = s.define('session', {
+    userId: {
+      type: SQ.UUID,
+      allowNull: false,
+      references: {
+        model: db.User,
+        key: 'id',
+      }
+    },
+    sessionId: {
+      type: SQ.STRING,
+      allowNull: false,
+    },
+  })
+
+  db.ExternalAccount = createOrder[createOrder.length] = s.define('external_account', {
+    userId: {
+      type: SQ.UUID,
+      allowNull: false,
+      references: {
+        model: db.User,
+        key: 'id',
+      }
+    },
+    provider: {
+      type: SQ.STRING,
+      allowNull: false,
+    },
+    accountId: {
+      type: SQ.STRING,
+      allowNull: false,
+    },
+  })
 
   db.Group = createOrder[createOrder.length] = s.define('group', {
     id: {
@@ -47,7 +94,7 @@ module.exports = (connectString, onReady) => {
       defaultValue: SQ.UUIDV1,
       primaryKey: true,
     },
-    admin_group_id: {
+    adminGroupId: {
       type: SQ.UUID,
       allowNull: false,
       references: {
@@ -67,7 +114,7 @@ module.exports = (connectString, onReady) => {
       defaultValue: SQ.UUIDV1,
       primaryKey: true,
     },
-    contest_id: {
+    contestId: {
       type: SQ.UUID,
       allowNull: false,
       references: {
@@ -75,7 +122,7 @@ module.exports = (connectString, onReady) => {
         key: 'id',
       }
     },
-    owner_id: {
+    ownerId: {
       type: SQ.UUID,
       allowNull: false,
       references: {
@@ -90,7 +137,7 @@ module.exports = (connectString, onReady) => {
   });
 
   db.UserGroup = createOrder[createOrder.length] = s.define('user_group', {
-    user_id: {
+    userId: {
       type: SQ.UUID,
       allowNull: false,
       references: {
@@ -98,7 +145,7 @@ module.exports = (connectString, onReady) => {
         key: 'id',
       }
     },
-    group_id: {
+    groupId: {
       type: SQ.UUID,
       allowNull: false,
       references: {
@@ -111,9 +158,14 @@ module.exports = (connectString, onReady) => {
 
   const defaultData = [
     () => db.User.create({
-      firstName: 'admin',
-      email: 'admin@admin.com'
-    }),
+      username: 'admin',
+      passwordHash: u.sha256('wtf'),
+    }).then(user => db.Group.create({
+        name: 'admin'
+      }).then(group => db.UserGroup.create({
+        userId: user.id,
+        groupId: group.id,
+      }))),
   ];
 
   // Initializes all the tables that need it
@@ -125,7 +177,10 @@ module.exports = (connectString, onReady) => {
     promise = promise.then(() => dataInsert());
   });
   promise.then(() => {
-    console.log('then is done');
-    onReady(db);
+    try {
+      onReady(db);
+    } catch(e) {
+      console.error(e);
+    }
   });
 };

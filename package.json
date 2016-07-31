@@ -8,6 +8,7 @@
     "body-parser": "^1.15.2",
     "bufferutil": "^1.2.1",
     "circular-json": "^0.3.0",
+    "cookie-parser": "^1.4.3",
     "express": "^4.14.0",
     "pg": "^6.0.3",
     "pg-hstore": "^2.3.2",
