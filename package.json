@@ -56,5 +56,8 @@
     "build-dev": "webpack --progress --colors",
     "prepublish": "npm run build",
     "webpack-profile": "webpack --profile --json"
+  },
+  "engines": {
+    "node": "6.2.1"
   }
 }
