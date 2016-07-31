@@ -8,9 +8,9 @@ exports.sha256 = function sha256(password) {
   return sha256;
 };
 
-exports.random = function random(bits = 48) {
+exports.random = function random(bits) {
   return new Promise((resolve, reject) => {
-    require('crypto').randomBytes(bits, function(err, buffer) {
+    require('crypto').randomBytes(bits || 48, function(err, buffer) {
       if (err) {
         reject(err);
       } else {
