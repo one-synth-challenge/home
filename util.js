@@ -20,43 +20,84 @@ exports.random = function random(bits) {
   });
 };
 
-exports.putInContext = function putInContext(varMapping, next) {
-  var wrap = false;
-  var current = process.domain;
-  if (!current) {
-    wrap = true;
-    current = domain.create();
-    current.on('error', (err) => {
-      console.error('Caught error!', err);
-    });
-  }
-  for (var name in varMapping) {
-    var value = varMapping[name];
-    current.add(value);
-    current[name] = value;
-  }
-  if(wrap) {
-    current.run(next);
-  } else {
+var deferredContext = {};
+var globalContext = {};
+
+
+/**
+ * Rather than providing an instance immediately, it makes sense to
+ * provide a provider so resolutions can happen when the variable is
+ * requiested.
+ */
+exports.putInContextDynamic = function putInContextDynamic(key, provider) {
+  deferredContext[key] = provider;
+};
+
+/**
+ * Providing a lazy context var, it will be instantiated when first requested
+ */
+exports.putInContextLazy = function putInContextLazy(key, provider) {
+  deferredContext[key] = () => {
+    var obj = provider();
+    globalContext[key] = obj;
+    return obj;
+  };
+};
+
+exports.executeInLocalContext = function(next) {
+  if (process && process.domain) {
     next();
+  } else {
+    var d = domain.create();
+    try {
+      d.run(next);
+      d.on('error', (e) => {
+        // The error won't crash the process, but what it does is worse!
+        // Though we've prevented abrupt process restarting, we are leaking
+        // resources like crazy if this ever happens.
+        // This is no better than process.on('uncaughtException')!
+        console.error('Domain execution error', e);
+      });
+    } catch(e) {
+      console.error('Domain run error', e);
+    }
+  }
+}
+
+/**
+ * Puts all key/value mappings into context, invokes the
+ * callback to proceed with execution
+ */
+exports.putInContext = function putInContext(varMapping) {
+  if (process && process.domain) {
+    for (var name in varMapping) {
+      var value = varMapping[name];
+      process.domain.add(value);
+      process.domain[name] = value;
+    }
+  } else {
+    for (var name in varMapping) {
+      globalContext[name] = varMapping[name];
+    }
   }
 }
 
 exports.getFromContext = function getFromContext(name) {
-  var value = process.domain[name];
+  var value;
+  if (process && process.domain) {
+    value = process.domain[name];
+  }
+  if (!value) {
+    value = globalContext[name];
+  }
+  if (!value) {
+    value = deferredContext[name];
+    if (value) {
+      value = value();
+    }
+  }
   if (!value) {
     console.log('no context value for', name);
-    var deferred = name+'$deferred';
-    value = process.domain[deferred];
-    if (value) {
-      console.log('no context value for', name, 'found deferred');
-      value = value(); // TODO this still may end up circular
-      process.domain.add(value);
-      process.domain[name] = value;
-      //process.domain.remove(deferred);
-    } else {
-      console.log('no context value for', name, ', no deferred found');
-    }
   }
   return value;
 }
@@ -66,7 +107,7 @@ exports.requireDir = function requireDir(dir, cb) {
     try {
       cb(file, require(filePath));
     } catch (e) {
-      console.error(e);
+      console.error("requireDir error", e);
       throw e;
     }
   });
@@ -119,3 +160,21 @@ exports.getFunctionArgumentNames = function getFunctionArgumentNames(func) {
   return result;
 }
 
+/// TRY manual way, since domains are deprecated and don't work
+try {
+  var ctx = require('./context');
+  var alt = Object.assign({}, module.exports, {
+    putInContext: function(vars, cb) {
+      try {
+
+      } finally {
+
+      }
+    },
+    getFromContext: function(v) {
+
+    }
+  });
+} catch(e) {
+  console.log(e);
+}

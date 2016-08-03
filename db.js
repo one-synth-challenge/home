@@ -106,6 +106,14 @@ module.exports = (connectString, onReady) => {
       type: SQ.STRING,
       allowNull: false,
     },
+    startDate: {
+      type: SQ.DATE,
+      allowNull: false,
+    },
+    endDate: {
+      type: SQ.DATE,
+      allowNull: false,
+    },
   });
 
   db.ContestEntry = createOrder[createOrder.length] = s.define('contest_entry', {
@@ -136,12 +144,82 @@ module.exports = (connectString, onReady) => {
     },
   });
 
+  db.Permission = createOrder[createOrder.length] = s.define('permission', {
+    id: {
+      type: SQ.UUID,
+      defaultValue: SQ.UUIDV1,
+      primaryKey: true,
+    },
+    name: {
+      type: SQ.STRING,
+      allowNull: false,
+    },
+  });
+
+  db.Role = createOrder[createOrder.length] = s.define('role', {
+    id: {
+      type: SQ.UUID,
+      defaultValue: SQ.UUIDV1,
+      primaryKey: true,
+    },
+    name: {
+      type: SQ.STRING,
+      allowNull: false,
+    },
+  });
+
+  db.RolePermission = createOrder[createOrder.length] = s.define('role_permission', {
+    roleId: {
+      type: SQ.UUID,
+      allowNull: false,
+      references: {
+        model: db.Role,
+        key: 'id',
+      }
+    },
+    permissionId: {
+      type: SQ.UUID,
+      allowNull: false,
+      references: {
+        model: db.Permission,
+        key: 'id',
+      }
+    },
+  });
+
+  db.UserRole = createOrder[createOrder.length] = s.define('user_role', {
+    userId: {
+      type: SQ.UUID,
+      allowNull: false,
+      references: {
+        model: db.User,
+        key: 'id',
+      }
+    },
+    roleId: {
+      type: SQ.UUID,
+      allowNull: false,
+      references: {
+        model: db.Role,
+        key: 'id',
+      }
+    },
+  });
+
   db.UserGroup = createOrder[createOrder.length] = s.define('user_group', {
     userId: {
       type: SQ.UUID,
       allowNull: false,
       references: {
         model: db.User,
+        key: 'id',
+      }
+    },
+    roleId: {
+      type: SQ.UUID,
+      allowNull: false,
+      references: {
+        model: db.Role,
         key: 'id',
       }
     },
@@ -156,16 +234,49 @@ module.exports = (connectString, onReady) => {
     },
   });
 
+  var permissions = require('./services/permission');
+  const syncPermissions = () => {
+    Object.keys(permissions).forEach((permissionName) =>
+      db.Permission.findOne({where:{name:{$eq:permissionName}}})
+      .then(permission => permission ?
+        permissions[permissionName] = permission
+        : db.Permission.create({name:permissionName})
+          .then(permission => permissions[permissionName] = permission))
+    );
+  };
+
+  var syncRoles = () => {
+    var roles = require('./services/role');
+    Object.keys(roles).forEach((roleName) =>
+      db.Role.findOne({where:{name:{$eq:roleName}}})
+      .then(role => {
+        if (role) {
+          console.log('Found role: ', roleName);
+          return roles[roleName] = role
+        } else {
+        	return db.Role.create({name:roleName})
+            .then(role => {
+              roles[roleName] = role;
+            })
+        }
+      })
+    );
+  };
+
   const defaultData = [
     () => db.User.create({
       username: 'admin',
-      passwordHash: u.sha256('wtf'),
+      passwordHash: u.sha256(process.env.INITIAL_ADMIN_PASSWORD || 'admin'),
     }).then(user => db.Group.create({
         name: 'admin'
-      }).then(group => db.UserGroup.create({
-        userId: user.id,
-        groupId: group.id,
-      }))),
+      }).then(group => {
+        var roles = require('./services/role');
+        return db.UserGroup.create({
+          userId: user.id,
+          groupId: group.id,
+          roleId: roles.SysAdmin.id,
+        })
+      })),
   ];
 
   // Initializes all the tables that need it
@@ -173,14 +284,18 @@ module.exports = (connectString, onReady) => {
   createOrder.map(table => {
     promise = promise.then(() => table.sync({force: true}));
   });
+
+  // Synchronize reference data
+  promise = promise.then(syncPermissions);
+
+  promise = promise.then(syncRoles);
+
+  // Insert default data
   defaultData.map(dataInsert => {
     promise = promise.then(() => dataInsert());
   });
   promise.then(() => {
-    try {
-      onReady(db);
-    } catch(e) {
-      console.error(e);
-    }
-  });
+    onReady(db);
+  })
+  .catch(err => console.error("onReady err:", err));
 };

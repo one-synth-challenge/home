@@ -48,6 +48,7 @@ module.exports = u.resolve((db) => new class Session {
   authenticate(username, password) {
     return db.User.findOne({where:{username:{$eq:username},passwordHash:{$eq:password}}})
       .then(db.assertFound)
-      .then(usr => this.begin(usr));
+      .then(usr =>
+        this.begin(usr));
   }
 });

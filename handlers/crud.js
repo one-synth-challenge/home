@@ -1,7 +1,9 @@
 var u = require('../util');
 
 module.exports = u.resolve((db, session) => (router, app) => {
-  router.all('/*', app.requireAuthentication);
+  router.all('/*', (req, res, next) =>
+    app.authenticate()
+      .then(() => next()));
 
   router.get('/', (req, res) => {
     res.json(Object.keys(db).filter(k => db[k].sync));
@@ -31,6 +33,11 @@ module.exports = u.resolve((db, session) => (router, app) => {
     return v;
   };
 
+  const getIdEqClause = (table, id, obj) => {
+    // {id:{$eq:req.params.id}}
+    return {id:{$eq:id}};
+  }
+
   Object.keys(db).map(k => {
     const table = db[k];
     if (!table.findAll) return;
@@ -41,20 +48,27 @@ module.exports = u.resolve((db, session) => (router, app) => {
       res.send(JSON.stringify(table.attributes, mapValues));
     });
 
-    router.get('/'+k, (req, res) => table.findAll()
-      .then(data => res.json(data))
+    router.get('/'+k, (req, res) =>
+      table.findAll()
+      .then(data =>
+        res.json(data))
       .catch(err => app.sendError(500, err)));
 
-    router.put('/'+k, (req, res) => table.create(req.body)
-      .then(data => res.json(data))
+    router.put('/'+k, (req, res) =>
+      table.create(req.body)
+      .then(data =>
+        res.json(data))
       .catch(err => app.sendError(500, err)));
 
-    router.post('/'+k+'/:id', (req, res) => table.update(req.body)
-      .then(data => res.json(data))
+    router.post('/'+k+'/:id', (req, res) =>
+      table.update(req.body,{where: getIdEqClause(table,req.params.id,req.body)})
+      .then(data =>
+        res.json(data))
       .catch(err => app.sendError(500, err)));
 
     router.delete('/'+k+'/:id', (req, res) => table.destroy({where:{id:{$eq:req.params.id}}})
-      .then(data => res.json(data))
+      .then(data =>
+        res.json(data))
       .catch(err => app.sendError(500, err)))
   });
 });
