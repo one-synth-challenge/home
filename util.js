@@ -1,6 +1,7 @@
 var path = require('path');
 var fs = require('fs');
 var domain = require('domain');
+const isDebugging = process.env.IS_DEBUG || false;
 
 exports.sha256 = function sha256(password) {
   var crypto = require('crypto');
@@ -96,7 +97,7 @@ exports.getFromContext = function getFromContext(name) {
       value = value();
     }
   }
-  if (!value) {
+  if (isDebugging && !value) {
     console.log('no context value for', name);
   }
   return value;

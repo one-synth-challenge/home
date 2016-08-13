@@ -10,7 +10,8 @@ const PORT = process.env.PORT || 3000;
 const templateDir = path.join(__dirname, 'html');
 const INDEX = path.join(templateDir, 'index.html');
 const u = require('./util');
-var connectionString = process.env.DATABASE_URL || 'postgres://postgres:mysecretpassword@localhost:5432/soundcloud-group-voting';
+const connectionString = process.env.DATABASE_URL || 'postgres://postgres:mysecretpassword@localhost:5432/soundcloud-group-voting';
+const isDebugging = process.env.IS_DEBUG || false;
 
 require('./db')(connectionString, (db) => {
   console.log('DB initialized...');
@@ -19,7 +20,7 @@ require('./db')(connectionString, (db) => {
 
   u.readDir('services', (file, requirePath) => {
     const serviceName = file.replace(/\.js/,'');
-    console.log('Adding service: ', serviceName, 'from', requirePath);
+    if (isDebugging) console.log('Adding service: ', serviceName, 'from', requirePath);
     u.putInContextLazy(serviceName, () => require(requirePath));
   });
 
@@ -30,51 +31,21 @@ require('./db')(connectionString, (db) => {
 
   // App utility functions
 
-  // Middleware for requiring authentication, will put 'user' in context
-  app.authenticate = () =>
-    u.resolve((user, req, session) => {
-      if (user != null) {
-        return Promise.resolve(user);
-      }
-      // support cookie-based auth with 'sessionId'
-      const sessionId = req.query.sessionId || req.get('X-Session-Id') || req.cookies && req.cookies.sessionId;
-      return session.find(sessionId)
-          .then(user => {
-            if (!process.domain) {
-              console.log('Setting current user, but no process.domain!');
-            }
-            // this should be in a domain
-            u.putInContext({ user: user });
-          })
-          .catch(err => {
-            app.sendError(401, 'Not Authorized');
-            throw err
-          })
-    });
-
-  app.requireAuthorization = (groupId, permission) =>
-    u.resolve((db, user) =>
-      db.UserGroup.findOne({where:{groupId:{$eq:groupId},userId:{$eq:user.id},permissionId:{$eq:permission.id}}})
-        .then(db.assertResult)
-        .catch(err => {
-          app.sendError(401, 'Not Authorized');
-          throw err
-        })
-    );
-
   app.sendError = (status, err) => {
-    console.error('Send error', err);
     var res = u.getFromContext('res');
     res.statusMessage = err && err.message;
     res.status(status).end();
   };
 
+  // Quell the authorization error promise rejection mess
+  process.on('unhandledRejection', function(reason, p) {
+    if (!reason.authFailure) {
+      console.error("Unhandled Rejection at: Promise ", p, " reason: ", reason);
+    }
+  });
+
   // Handle cookies
   app.use(cookieParser());
-
-  // Add proper HTTP JSON + form handling for all requests
-  app.use(bodyParser.json());
-  app.use(bodyParser.urlencoded({ extended: true }));
 
   /**
    * Add CORS headers for all requests
@@ -83,26 +54,81 @@ require('./db')(connectionString, (db) => {
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'POST, GET, OPTIONS, PUT, DELETE');
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Cookies, X-Session-Id');
-    res.setHeader('Content-Type', 'application/json');
+    if (req.method === 'OPTIONS') {
+      // TODO this won't send all the same headers... might be a problem?
+      res.end();
+      return;
+    }
+    // also allows us to use: .then(res.json)
+    var _json = res.json;
+    res.json = (...args) => {
+      res.setHeader('Content-Type', 'application/json');
+      _json.apply(res, args);
+    };
     next();
   });
 
+  // handle uploads
+  app.use((req, res, next) => {
+    var contentType = req.headers['content-type'];
+    if (contentType && contentType.indexOf('multipart/form-data') >= 0) {
+      var formidable = require('formidable');
+      var form = new formidable.IncomingForm();
+        form.on('progress', function(bytesReceived, bytesExpected) {
+        });
+        form.parse(req, (err, fields, files) => {
+          req.body = {};
+          Object.keys(fields).forEach(k =>
+            req.body[k] = JSON.parse(fields[k]));
+          Object.keys(files).forEach(k =>
+              req.body[k] = files[k]);
+          next();
+        });
+    } else {
+      next();
+    }
+  });
+
+  // Add proper HTTP JSON + form handling for all requests
+  app.use(bodyParser.json());
+  app.use(bodyParser.urlencoded({ extended: true }));
+
+  var stackFrame = function(context, next) {
+    this.context = context,
+    next();
+  };
+
   // Put req & res in the current context
   app.use((req, res, next) => {
-    u.executeInLocalContext(() => {
-      try {
-        u.putInContext({ req: req, res: res });
-        next();
-      } catch(e) {
-        console.error('Error duing req/res:', e);
-        throw e;
+    var d = require('domain').create();
+    const cleanUpDomain = (event) => () => {
+      if (d.destroy) {
+        d.destroy();
       }
-    })
+    };
+    res.on('finish', cleanUpDomain('finish'));
+    res.on('close', cleanUpDomain('close'));
+    res.on('end', cleanUpDomain('end'));
+    res.on('error', cleanUpDomain('error'));
+
+    d.on('error', (e) => {
+      // The error won't crash the process, but what it does is worse!
+      // Though we've prevented abrupt process restarting, we are leaking
+      // resources like crazy if this ever happens.
+      // This is no better than process.on('uncaughtException')!
+      console.error('Domain execution error', e);
+    });
+
+    //u.executeInLocalContext(() => {
+    d.run(() => {
+      u.putInContext({ req: req, res: res });
+      next();
+    });
   });
 
   u.requireDir('handlers', (name, handler) => {
     const route = '/' + name.replace(/\.js/,'');
-    console.log('Routing', name, 'to', route);
+    if (isDebugging) console.log('Routing', name, 'to', route);
     const subrouter = new express.Router({ mergeParams: true });
     try {
       handler(subrouter, app, db);
@@ -113,7 +139,7 @@ require('./db')(connectionString, (db) => {
   });
 
   app.all('/sql', function (req, res, next) {
-    console.log('Accessing the secret section ...');
+    if (isDebugging) console.log('Accessing the secret section ...');
     next(); // pass control to the next handler
   });
 
@@ -141,8 +167,10 @@ require('./db')(connectionString, (db) => {
 
   const wss = new SocketServer({ server });
   wss.on('connection', (ws) => {
-    console.log('Client connected');
-    ws.on('close', () => console.log('Client disconnected'));
+    if (isDebugging) console.log('Client connected');
+    ws.on('close', () => {
+      if (isDebugging) console.log('Client disconnected')
+    });
   });
 
   setInterval(() => {

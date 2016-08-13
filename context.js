@@ -72,11 +72,3 @@ const findContextFromCallStack = () => {
   });
   return contextVars;
 }
-
-
-// for fun
-//var fn = makeContextFunction('currentUser');
-//fn("george", ['some', 'args'], (...args) => {
-//  console.log(findContextVarsFromCaller());
-//  console.log(findContextFromCallStack());
-//})

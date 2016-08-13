@@ -1,8 +1,14 @@
 var u = require('../util');
 
-module.exports = u.resolve((db, session) => (router, app) => {
+module.exports = u.resolve((db, auth, session) => (router, app) => {
   router.all('/*', (req, res, next) =>
-    app.authenticate()
+    auth.enticate()
+      .then(u => {
+        if (!u.isAdmin) {
+          throw new Error("Not found");
+        }
+        return u;
+      })
       .then(() => next()));
 
   router.get('/', (req, res) => {

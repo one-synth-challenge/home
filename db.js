@@ -1,22 +1,50 @@
 var SQ = require('sequelize');
 var u = require('./util');
+var rebuild = true || process.env.REBUILD_DATABASE;
 
 module.exports = (connectString, onReady) => {
-  const s = new SQ(connectString);
+  const s = new SQ(connectString, {
+    //logging: (text) => null
+  });
 
   const db = {
     query: s.query,
     normalizeDataType: s.normalizeDataType.bind(s),
     DataTypes: SQ,
+    literal: s.literal.bind(s),
     assertFound: result => {
       if (!result) {
         throw new Error('Not Found');
       }
       return result;
     },
+    select: (...args) => {
+      var sql = args[0];
+      var params = args.slice(1);
+      return s.query(sql,
+        { replacements: params, type: SQ.QueryTypes.SELECT }
+      );
+    },
   };
 
   const createOrder = [];
+
+  db.Image = createOrder[createOrder.length] = s.define('image', {
+    id: {
+      type: SQ.UUID,
+      defaultValue: SQ.UUIDV1,
+      primaryKey: true,
+    },
+    url: {
+      type: SQ.STRING,
+    },
+    type: {
+      type: SQ.STRING,
+    },
+    data: {
+      type: SQ.BLOB,
+    },
+  });
 
   db.User = createOrder[createOrder.length] = s.define('user', {
     id: {
@@ -27,6 +55,11 @@ module.exports = (connectString, onReady) => {
     username: {
       type: SQ.STRING,
       allowNull: false,
+    },
+    isAdmin: {
+      type: SQ.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
     },
     passwordHash: {
       type: SQ.STRING,
@@ -39,6 +72,15 @@ module.exports = (connectString, onReady) => {
     },
     email: {
       type: SQ.STRING,
+    },
+    imageId: {
+      type: SQ.UUID,
+      allowNull: true,
+      field: 'imageid',
+      references: {
+        model: db.Image,
+        key: 'id',
+      }
     },
   });
 
@@ -73,8 +115,14 @@ module.exports = (connectString, onReady) => {
     accountId: {
       type: SQ.STRING,
       allowNull: false,
+      field: 'accountid',
     },
-  })
+  }, {
+    indexes: [{
+      unique: true,
+      fields: ['provider', 'accountid']
+    }],
+  });
 
   db.Group = createOrder[createOrder.length] = s.define('group', {
     id: {
@@ -86,6 +134,25 @@ module.exports = (connectString, onReady) => {
       type: SQ.STRING,
       allowNull: false,
     },
+    public: {
+      type: SQ.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
+    imageId: {
+      type: SQ.UUID,
+      allowNull: true,
+      field: 'imageid',
+      references: {
+        model: db.Image,
+        key: 'id',
+      }
+    },
+  }, {
+    indexes: [{
+      unique: true,
+      fields: ['name']
+    }],
   });
 
   db.Contest = createOrder[createOrder.length] = s.define('contest', {
@@ -97,6 +164,7 @@ module.exports = (connectString, onReady) => {
     adminGroupId: {
       type: SQ.UUID,
       allowNull: false,
+      field: 'admingroupid',
       references: {
         model: db.Group,
         key: 'id',
@@ -106,13 +174,29 @@ module.exports = (connectString, onReady) => {
       type: SQ.STRING,
       allowNull: false,
     },
+    active: {
+      type: SQ.BOOLEAN,
+      allowNull: false,
+      defaultValue: false,
+    },
     startDate: {
       type: SQ.DATE,
       allowNull: false,
+      defaultValue: SQ.NOW,
     },
     endDate: {
       type: SQ.DATE,
       allowNull: false,
+      defaultValue: SQ.NOW,
+    },
+    imageId: {
+      type: SQ.UUID,
+      allowNull: true,
+      field: 'imageid',
+      references: {
+        model: db.Image,
+        key: 'id',
+      }
     },
   });
 
@@ -168,48 +252,11 @@ module.exports = (connectString, onReady) => {
     },
   });
 
-  db.RolePermission = createOrder[createOrder.length] = s.define('role_permission', {
-    roleId: {
-      type: SQ.UUID,
-      allowNull: false,
-      references: {
-        model: db.Role,
-        key: 'id',
-      }
-    },
-    permissionId: {
-      type: SQ.UUID,
-      allowNull: false,
-      references: {
-        model: db.Permission,
-        key: 'id',
-      }
-    },
-  });
-
-  db.UserRole = createOrder[createOrder.length] = s.define('user_role', {
-    userId: {
-      type: SQ.UUID,
-      allowNull: false,
-      references: {
-        model: db.User,
-        key: 'id',
-      }
-    },
-    roleId: {
-      type: SQ.UUID,
-      allowNull: false,
-      references: {
-        model: db.Role,
-        key: 'id',
-      }
-    },
-  });
-
   db.UserGroup = createOrder[createOrder.length] = s.define('user_group', {
     userId: {
       type: SQ.UUID,
       allowNull: false,
+      field: 'userid',
       references: {
         model: db.User,
         key: 'id',
@@ -218,6 +265,7 @@ module.exports = (connectString, onReady) => {
     roleId: {
       type: SQ.UUID,
       allowNull: false,
+      field: 'roleid',
       references: {
         model: db.Role,
         key: 'id',
@@ -226,46 +274,59 @@ module.exports = (connectString, onReady) => {
     groupId: {
       type: SQ.UUID,
       allowNull: false,
+      field: 'groupid',
       references: {
         model: db.Group,
         key: 'id',
         //deferrable: SQ.Deferrable.INITIALLY_IMMEDIATE,
       }
     },
+  }, {
+    indexes: [{
+      unique: true,
+      fields: ['userid', 'roleid', 'groupid']
+    }],
   });
 
   var permissions = require('./services/permission');
-  const syncPermissions = () => {
-    Object.keys(permissions).forEach((permissionName) =>
+  const syncPermissions = () => Promise.all(
+    Object.keys(permissions).map((permissionName) =>
       db.Permission.findOne({where:{name:{$eq:permissionName}}})
-      .then(permission => permission ?
-        permissions[permissionName] = permission
-        : db.Permission.create({name:permissionName})
-          .then(permission => permissions[permissionName] = permission))
-    );
-  };
+      .then(permission => {
+        if (permission) {
+          permissions[permissionName] = permission;
+        } else {
+          return db.Permission.create({name:permissionName})
+            .then(permission => permissions[permissionName] = permission);
+        }
+      })
+    )
+  );
 
   var syncRoles = () => {
     var roles = require('./services/role');
-    Object.keys(roles).forEach((roleName) =>
-      db.Role.findOne({where:{name:{$eq:roleName}}})
-      .then(role => {
-        if (role) {
-          console.log('Found role: ', roleName);
-          return roles[roleName] = role
-        } else {
-        	return db.Role.create({name:roleName})
-            .then(role => {
-              roles[roleName] = role;
-            })
-        }
-      })
-    );
+    return Promise.all(
+      roles.roleKeys().map((roleName) =>
+        db.Role.findOne({where:{name:{$eq:roleName}}})
+        .then(role => {
+          if (role) {
+            role.permissions = roles[roleName];
+             roles[roleName] = role
+          } else {
+            return db.Role.create({name:roleName})
+              .then(role => {
+                role.permissions = roles[roleName];
+                roles[roleName] = role;
+              })
+          }
+        })
+    ));
   };
 
   const defaultData = [
     () => db.User.create({
       username: 'admin',
+      isAdmin: true,
       passwordHash: u.sha256(process.env.INITIAL_ADMIN_PASSWORD || 'admin'),
     }).then(user => db.Group.create({
         name: 'admin'
@@ -275,14 +336,22 @@ module.exports = (connectString, onReady) => {
           userId: user.id,
           groupId: group.id,
           roleId: roles.SysAdmin.id,
-        })
+        }).then(() => db.UserGroup.create({
+          userId: user.id,
+          groupId: group.id,
+          roleId: roles.Owner.id,
+        }))
       })),
   ];
 
   // Initializes all the tables that need it
   var promise = Promise.resolve();
   createOrder.map(table => {
-    promise = promise.then(() => table.sync({force: true}));
+    // TODO better way to quote table names?
+    table.qname = s.dialect.QueryGenerator.quoteIdentifier(table.tableName);
+    promise = promise.then(() => table.sync({
+      force: rebuild
+    }));
   });
 
   // Synchronize reference data

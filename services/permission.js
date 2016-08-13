@@ -1,5 +1,5 @@
 module.exports = {
-  Admin: null,
+  Modify: null, // This is an owner type of permission
   Manage: null,
   Submit: null,
 };
